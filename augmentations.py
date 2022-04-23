@@ -1,114 +1,208 @@
-import os
-import numpy as np
+import math
 import tensorflow as tf
 
-import augmentations
+from data_utils import exterior_exclusion
 
 
-class COVIDxCTDataset:
-    """COVIDx CT dataset class, which handles construction of train/validation datasets"""
-    def __init__(self, data_dir, image_height=512, image_width=512, max_bbox_jitter=0.025, max_rotation=10,
-                 max_shear=0.15, max_pixel_shift=10, max_pixel_scale_change=0.2, shuffle_buffer=1000):
-        # General parameters
-        self.data_dir = data_dir
-        self.image_height = image_height
-        self.image_width = image_width
-        self.shuffle_buffer = shuffle_buffer
+def random_rotation(image, max_degrees, bbox=None, prob=0.5):
+    """Applies random rotation to image and bbox"""
+    def _rotation(image, bbox):
+        # Get random angle
+        degrees = tf.random.uniform([], minval=-max_degrees, maxval=max_degrees, dtype=tf.float32)
+        radians = degrees * math.pi / 180.
+        if bbox is not None:
+            # Get offset from image center
+            image_shape = tf.cast(tf.shape(image), tf.float32)
+            image_height, image_width = image_shape[0], image_shape[1]
+            bbox = tf.cast(bbox, tf.float32)
+            center_x = image_width / 2.
+            center_y = image_height / 2.
+            bbox_center_x = (bbox[0] + bbox[2]) / 2.
+            bbox_center_y = (bbox[1] + bbox[3]) / 2.
+            trans_x = center_x - bbox_center_x
+            trans_y = center_y - bbox_center_y
 
-        # Augmentation parameters
-        self.max_bbox_jitter = max_bbox_jitter
-        self.max_rotation = max_rotation
-        self.max_shear = max_shear
-        self.max_pixel_shift = max_pixel_shift
-        self.max_pixel_scale_change = max_pixel_scale_change
+            # Apply rotation
+            image = _translate_image(image, trans_x, trans_y)
+            bbox = _translate_bbox(bbox, image_height, image_width, trans_x, trans_y)
+            image = tf.contrib.image.rotate(image, radians, interpolation='BILINEAR')
+            bbox = _rotate_bbox(bbox, image_height, image_width, radians)
+            image = _translate_image(image, -trans_x, -trans_y)
+            bbox = _translate_bbox(bbox, image_height, image_width, -trans_x, -trans_y)
+            bbox = tf.cast(bbox, tf.int32)
 
-    def train_dataset(self, train_split_file='train.txt', batch_size=1):
-        """Returns training dataset"""
-        return self._make_dataset(train_split_file, batch_size, True)
+            return image, bbox
+        return tf.contrib.image.rotate(image, radians, interpolation='BILINEAR')
 
-    def validation_dataset(self, val_split_file='val.txt', batch_size=1):
-        """Returns validation dataset (also used for testing)"""
-        return self._make_dataset(val_split_file, batch_size, False)
+    retval = image if bbox is None else (image, bbox)
+    return tf.cond(_should_apply(prob), lambda: _rotation(image, bbox), lambda: retval)
 
-    def _make_dataset(self, split_file, batch_size, is_training, balanced=True):
-        """Creates COVIDX-CT dataset for train or val split"""
-        files, classes, bboxes = self._get_files(split_file)
-        count = len(files)
 
-        # Create balanced dataset if required
-        if is_training and balanced:
-            files = np.asarray(files)
-            classes = np.asarray(classes, dtype=np.int32)
-            bboxes = np.asarray(bboxes, dtype=np.int32)
-            class_nums = np.unique(classes)
-            class_wise_datasets = []
-            for cls in class_nums:
-                indices = np.where(classes == cls)[0]
-                class_wise_datasets.append(
-                    tf.data.Dataset.from_tensor_slices((files[indices], classes[indices], bboxes[indices])))
-            class_weights = [1.0 / len(class_nums) for _ in class_nums]
-            dataset = tf.data.experimental.sample_from_datasets(
-                class_wise_datasets, class_weights)
-        else:
-            dataset = tf.data.Dataset.from_tensor_slices((files, classes, bboxes))
+def random_bbox_jitter(bbox, image_height, image_width, max_fraction, prob=0.5):
+    """Randomly jitters bbox coordinates by +/- jitter_fraction of the width/height"""
+    def _bbox_jitter(bbox):
+        bbox = tf.cast(bbox, tf.float32)
+        width_jitter = max_fraction*(bbox[2] - bbox[0])
+        height_jitter = max_fraction*(bbox[3] - bbox[1])
+        xmin = bbox[0] + tf.random.uniform([], minval=-width_jitter, maxval=width_jitter, dtype=tf.float32)
+        ymin = bbox[1] + tf.random.uniform([], minval=-height_jitter, maxval=height_jitter, dtype=tf.float32)
+        xmax = bbox[2] + tf.random.uniform([], minval=-width_jitter, maxval=width_jitter, dtype=tf.float32)
+        ymax = bbox[3] + tf.random.uniform([], minval=-height_jitter, maxval=height_jitter, dtype=tf.float32)
+        xmin, ymin, xmax, ymax = _clip_bbox(xmin, ymin, xmax, ymax, image_height, image_width)
+        bbox = tf.cast(tf.stack([xmin, ymin, xmax, ymax]), tf.int32)
+        return bbox
 
-        # Shuffle and repeat in training
-        if is_training:
-            dataset = dataset.shuffle(buffer_size=self.shuffle_buffer)
-            dataset = dataset.repeat()
+    return tf.cond(_should_apply(prob), lambda: _bbox_jitter(bbox), lambda: bbox)
 
-        # Create and apply map function
-        load_and_process = self._get_load_and_process_fn(is_training)
-        dataset = dataset.map(load_and_process)
 
-        # Batch data
-        dataset = dataset.batch(batch_size)
+def random_shift_and_scale(image, max_shift, max_scale_change, prob=0.5):
+    """Applies random shift and scale to pixel values"""
+    def _shift_and_scale(image):
+        shift = tf.cast(tf.random.uniform([], minval=-max_shift, maxval=max_shift, dtype=tf.int32), tf.float32)
+        scale = tf.random.uniform([], minval=(1. - max_scale_change),
+                                  maxval=(1. + max_scale_change), dtype=tf.float32)
+        image = scale*(tf.cast(image, tf.float32) + shift)
+        image = tf.cast(tf.clip_by_value(image, 0., 255.), tf.uint8)
+        return image
 
-        return dataset, count, batch_size
+    return tf.cond(_should_apply(prob), lambda: _shift_and_scale(image), lambda: image)
 
-    def _get_load_and_process_fn(self, is_training):
-        """Creates map function for TF dataset"""
-        def load_and_process(path, label, bbox):
-            # Load image
-            image = tf.image.decode_png(tf.io.read_file(path), channels=1)
 
-            # Apply augmentations and/or crop to bbox
-            if is_training:
-                image, bbox = self._augment_image_and_bbox(image, bbox)
-            else:
-                image = tf.image.crop_to_bounding_box(image, bbox[1], bbox[0], bbox[3] - bbox[1], bbox[2] - bbox[0])
+def random_shear(image, max_lambda, bbox=None, prob=0.5):
+    """Applies random shear in either the x or y direction"""
+    shear_lambda = tf.random.uniform([], minval=-max_lambda, maxval=max_lambda, dtype=tf.float32)
+    image_shape = tf.cast(tf.shape(image), tf.float32)
+    image_height, image_width = image_shape[0], image_shape[1]
 
-            # Stack to 3-channel, scale to [0, 1] and resize
-            image = tf.image.grayscale_to_rgb(image)
-            image = tf.cast(image, tf.float32)
-            image = image / 255.0
-            image = tf.image.resize(image, [self.image_height, self.image_width])
-            label = tf.cast(label, dtype=tf.int32)
+    def _shear_x(image, bbox):
+        image = _shear_x_image(image, shear_lambda)
+        if bbox is not None:
+            bbox = _shear_bbox(bbox, image_height, image_width, shear_lambda, horizontal=True)
+            bbox = tf.cast(bbox, tf.int32)
+            return image, bbox
+        return image
 
-            return {'image': image, 'label': label}
+    def _shear_y(image, bbox):
+        image = _shear_y_image(image, shear_lambda)
+        if bbox is not None:
+            bbox = _shear_bbox(bbox, image_height, image_width, shear_lambda, horizontal=False)
+            bbox = tf.cast(bbox, tf.int32)
+            return image, bbox
+        return image
 
-        return load_and_process
+    def _shear(image, bbox):
+        return tf.cond(_should_apply(0.5), lambda: _shear_x(image, bbox), lambda: _shear_y(image, bbox))
 
-    def _augment_image_and_bbox(self, image, bbox):
-        """Apply augmentations to image and bbox"""
-        image_shape = tf.cast(tf.shape(image), tf.float32)
-        image_height, image_width = image_shape[0], image_shape[1]
-        image = augmentations.random_exterior_exclusion(image)
-        bbox = augmentations.random_bbox_jitter(bbox, image_height, image_width, self.max_bbox_jitter)
-        image, bbox = augmentations.random_rotation(image, self.max_rotation, bbox)
-        image, bbox = augmentations.random_shear(image, self.max_shear, bbox)
-        image = tf.image.crop_to_bounding_box(image, bbox[1], bbox[0], bbox[3] - bbox[1], bbox[2] - bbox[0])
-        image = augmentations.random_shift_and_scale(image, self.max_pixel_shift, self.max_pixel_scale_change)
-        image = tf.image.random_flip_left_right(image)
-        return image, bbox
+    retval = image if bbox is None else (image, bbox)
+    return tf.cond(_should_apply(prob), lambda: _shear(image, bbox), lambda: retval)
 
-    def _get_files(self, split_file):
-        """Gets image filenames and classes"""
-        files, classes, bboxes = [], [], []
-        with open(split_file, 'r') as f:
-            for line in f.readlines():
-                fname, cls, xmin, ymin, xmax, ymax = line.strip('\n').split()
-                files.append(os.path.join(self.data_dir, fname))
-                classes.append(int(cls))
-                bboxes.append([int(xmin), int(ymin), int(xmax), int(ymax)])
-        return files, classes, bboxes
+
+def random_exterior_exclusion(image, prob=0.5):
+    """Randomly removes visual features exterior to the patient's body"""
+    def _exterior_exclusion(image):
+        shape = image.get_shape()
+        image = tf.py_func(exterior_exclusion, [image], tf.uint8)
+        image.set_shape(shape)
+        return image
+    return tf.cond(_should_apply(prob), lambda: _exterior_exclusion(image), lambda: image)
+
+
+def _translate_image(image, delta_x, delta_y):
+    """Translate an image"""
+    return tf.contrib.image.translate(image, [delta_x, delta_y], interpolation='BILINEAR')
+
+
+def _translate_bbox(bbox, image_height, image_width, delta_x, delta_y):
+    """Translate an bbox, ensuring coordinates lie in the image"""
+    bbox = bbox + tf.stack([delta_x, delta_y, delta_x, delta_y])
+    xmin, ymin, xmax, ymax = _clip_bbox(bbox[0], bbox[1], bbox[2], bbox[3], image_height, image_width)
+    bbox = tf.stack([xmin, ymin, xmax, ymax])
+    return bbox
+
+
+def _rotate_bbox(bbox, image_height, image_width, radians):
+    """Rotates the bbox by the given angle"""
+    # Shift bbox to origin
+    xmin, ymin, xmax, ymax = bbox[0], bbox[1], bbox[2], bbox[3]
+    center_x = (xmin + xmax) / 2.
+    center_y = (ymin + ymax) / 2.
+    xmin = xmin - center_x
+    xmax = xmax - center_x
+    ymin = ymin - center_y
+    ymax = ymax - center_y
+
+    # Rotate bbox coordinates
+    radians = -radians  # negate direction since y-axis is flipped
+    coords = tf.stack([[xmin, ymin], [xmax, ymin], [xmin, ymax], [xmax, ymax]])
+    coords = tf.transpose(tf.cast(coords, tf.float32))
+    rotation_matrix = tf.stack(
+        [[tf.cos(radians), -tf.sin(radians)],
+         [tf.sin(radians), tf.cos(radians)]])
+    new_coords = tf.matmul(rotation_matrix, coords)
+
+    # Find new bbox coordinates and clip to image size
+    xmin = tf.reduce_min(new_coords[0, :]) + center_x
+    ymin = tf.reduce_min(new_coords[1, :]) + center_y
+    xmax = tf.reduce_max(new_coords[0, :]) + center_x
+    ymax = tf.reduce_max(new_coords[1, :]) + center_y
+    xmin, ymin, xmax, ymax = _clip_bbox(xmin, ymin, xmax, ymax, image_height, image_width)
+    bbox = tf.stack([xmin, ymin, xmax, ymax])
+
+    return bbox
+
+
+def _shear_x_image(image, shear_lambda):
+    """Shear image in x-direction"""
+    tform = tf.stack([1., shear_lambda, 0., 0., 1., 0., 0., 0.])
+    image = tf.contrib.image.transform(
+        image, tform, interpolation='BILINEAR')
+    return image
+
+
+def _shear_y_image(image, shear_lambda):
+    """Shear image in y-direction"""
+    tform = tf.stack([1., 0., 0., shear_lambda, 1., 0., 0., 0.])
+    image = tf.contrib.image.transform(
+        image, tform, interpolation='BILINEAR')
+    return image
+
+
+def _shear_bbox(bbox, image_height, image_width, shear_lambda, horizontal=True):
+    """Shear bbox in x- or y-direction"""
+    # Shear bbox coordinates
+    xmin, ymin, xmax, ymax = bbox[0], bbox[1], bbox[2], bbox[3]
+    coords = tf.stack([[xmin, ymin], [xmax, ymin], [xmin, ymax], [xmax, ymax]])
+    coords = tf.transpose(tf.cast(coords, tf.float32))
+    if horizontal:
+        shear_matrix = tf.stack(
+            [[1., -shear_lambda],
+             [0., 1.]])
+    else:
+        shear_matrix = tf.stack(
+            [[1., 0.],
+             [-shear_lambda, 1.]])
+    new_coords = tf.matmul(shear_matrix, coords)
+
+    # Find new bbox coordinates and clip to image size
+    xmin = tf.reduce_min(new_coords[0, :])
+    ymin = tf.reduce_min(new_coords[1, :])
+    xmax = tf.reduce_max(new_coords[0, :])
+    ymax = tf.reduce_max(new_coords[1, :])
+    xmin, ymin, xmax, ymax = _clip_bbox(xmin, ymin, xmax, ymax, image_height, image_width)
+    bbox = tf.stack([xmin, ymin, xmax, ymax])
+
+    return bbox
+
+
+def _clip_bbox(xmin, ymin, xmax, ymax, image_height, image_width):
+    """Clip bbox to valid image coordinates"""
+    xmin = tf.clip_by_value(xmin, 0, image_width)
+    ymin = tf.clip_by_value(ymin, 0, image_height)
+    xmax = tf.clip_by_value(xmax, 0, image_width)
+    ymax = tf.clip_by_value(ymax, 0, image_height)
+    return xmin, ymin, xmax, ymax
+
+
+def _should_apply(prob):
+    """Helper function to create bool tensor with probability"""
+    return tf.cast(tf.floor(tf.random_uniform([], dtype=tf.float32) + prob), tf.bool)
