@@ -222,4 +222,4 @@ def _clip_bbox(xmin, ymin, xmax, ymax, image_height, image_width):
 
 def _should_apply(prob):
     """Helper function to create bool tensor with probability"""
-    return tf.cast(tf.floor(tf.random_uniform([], dtype=tf.float32) + prob), tf.bool)
+    return tf.cast(tf.floor(tf.random.uniform([], dtype=tf.float32) + prob), tf.bool)
