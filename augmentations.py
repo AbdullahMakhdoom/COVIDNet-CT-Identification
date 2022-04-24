@@ -1,4 +1,5 @@
 import math
+import tensorflow as tf
 import tensorflow_addons as tfa
 
 def random_rotation(image, max_degrees, bbox=None, prob=0.5):
