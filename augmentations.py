@@ -4,6 +4,18 @@ import tensorflow as tf
 import tensorflow_addons as tfa
 
 
+def find_contours(binary_image):
+    """Helper function for finding contours"""
+    return cv2.findContours(binary_image, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)[0]
+
+
+def body_contour(binary_image):
+    """Helper function to get body contour"""
+    contours = find_contours(binary_image)
+    areas = [cv2.contourArea(cnt) for cnt in contours]
+    body_idx = np.argmax(areas)
+    return contours[body_idx]
+
 def random_rotation(image, max_degrees, bbox=None, prob=0.5):
     """Applies random rotation to image and bbox"""
     def _rotation(image, bbox):
