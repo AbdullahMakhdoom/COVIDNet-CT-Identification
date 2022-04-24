@@ -118,7 +118,7 @@ def random_exterior_exclusion(image, prob=0.5):
     """Randomly removes visual features exterior to the patient's body"""
     def _exterior_exclusion(image):
         shape = image.get_shape()
-        image = tf.py_func(exterior_exclusion, [image], tf.uint8)
+        image = tf.numpy_func(exterior_exclusion, [image], tf.uint8)
         image.set_shape(shape)
         return image
     return tf.cond(_should_apply(prob), lambda: _exterior_exclusion(image), lambda: image)
