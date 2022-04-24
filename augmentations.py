@@ -1,5 +1,5 @@
 import math
-import tensorflow as tf
+import tensorflow_addons as tfa
 
 def random_rotation(image, max_degrees, bbox=None, prob=0.5):
     """Applies random rotation to image and bbox"""
@@ -22,14 +22,14 @@ def random_rotation(image, max_degrees, bbox=None, prob=0.5):
             # Apply rotation
             image = _translate_image(image, trans_x, trans_y)
             bbox = _translate_bbox(bbox, image_height, image_width, trans_x, trans_y)
-            image = tf.contrib.image.rotate(image, radians, interpolation='BILINEAR')
+            image = tfa.image.rotate(image, radians, interpolation='BILINEAR')
             bbox = _rotate_bbox(bbox, image_height, image_width, radians)
             image = _translate_image(image, -trans_x, -trans_y)
             bbox = _translate_bbox(bbox, image_height, image_width, -trans_x, -trans_y)
             bbox = tf.cast(bbox, tf.int32)
 
             return image, bbox
-        return tf.contrib.image.rotate(image, radians, interpolation='BILINEAR')
+        return tfa.image.rotate(image, radians, interpolation='BILINEAR')
 
     retval = image if bbox is None else (image, bbox)
     return tf.cond(pred=_should_apply(prob), true_fn=lambda: _rotation(image, bbox), false_fn=lambda: retval)
@@ -126,7 +126,7 @@ def random_exterior_exclusion(image, prob=0.5):
 
 def _translate_image(image, delta_x, delta_y):
     """Translate an image"""
-    return tf.contrib.image.translate(image, [delta_x, delta_y], interpolation='BILINEAR')
+    return tfa.image.translate(image, [delta_x, delta_y], interpolation='BILINEAR')
 
 
 def _translate_bbox(bbox, image_height, image_width, delta_x, delta_y):
@@ -171,7 +171,7 @@ def _rotate_bbox(bbox, image_height, image_width, radians):
 def _shear_x_image(image, shear_lambda):
     """Shear image in x-direction"""
     tform = tf.stack([1., shear_lambda, 0., 0., 1., 0., 0., 0.])
-    image = tf.contrib.image.transform(
+    image = tfa.image.transform(
         image, tform, interpolation='BILINEAR')
     return image
 
@@ -179,7 +179,7 @@ def _shear_x_image(image, shear_lambda):
 def _shear_y_image(image, shear_lambda):
     """Shear image in y-direction"""
     tform = tf.stack([1., 0., 0., shear_lambda, 1., 0., 0., 0.])
-    image = tf.contrib.image.transform(
+    image = tfa.image.transform(
         image, tform, interpolation='BILINEAR')
     return image
 
