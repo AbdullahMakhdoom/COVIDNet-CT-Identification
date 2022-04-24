@@ -1,7 +1,8 @@
 import math
+import cv2
 import tensorflow as tf
 import tensorflow_addons as tfa
-import cv2
+
 
 def random_rotation(image, max_degrees, bbox=None, prob=0.5):
     """Applies random rotation to image and bbox"""
