@@ -32,9 +32,9 @@ The notebook `covidct-2a.ipynb` walks through the process of data preparation an
 
 Various backbone architectures can be selected ('vgg16', 'vgg19', 'resnet101', 'resnet152', 'densenet161', 'densenet201') and experimented with different number of layers to be frozen upon fine-tuning. 
 
-Some data augmentations are also applied during training, for better generalization of DNN.
+Data augmentations are also applied during training, for better generalization of DNN.
 
-After 3 eopchs, following metrics were achieved :
+After 3 epochs, following evaluation metrics were achieved :
 
 ![image](https://user-images.githubusercontent.com/30556653/172347869-81eac92e-d78f-4f17-9d70-b9c24fc68595.png)
 
