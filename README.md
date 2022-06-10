@@ -4,7 +4,7 @@
 
 A large-scale chest CT dataset for COVID-19 detection, comprising of 104,009 CT slices from 1,489 patients. 
 
-Kaggle Link : https://www.kaggle.com/datasets/c395fb339f210700ba392d81bf200f766418238c2734e5237b5dd0b6fc724fcb/version/1
+[Kaggle Link](https://www.kaggle.com/datasets/c395fb339f210700ba392d81bf200f766418238c2734e5237b5dd0b6fc724fcb/version/1)
 
 ##### Directory Sturcture
 
@@ -41,7 +41,9 @@ After 3 epochs, following evaluation metrics were achieved :
 ## Model Serving
 
 
+### References
 
+- [Measuring and tuning performance of a TensorFlow inference system using Triton Inference Server and Tesla T4](https://cloud.google.com/architecture/scalable-tensorflow-inference-system-using-tensorrt-and-tesla-t4)
 
 
 
