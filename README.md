@@ -1,4 +1,4 @@
-# COVIDNet-CT-Detection
+# COVIDNet-CT-Identification
 
 ## Dataset 
 
