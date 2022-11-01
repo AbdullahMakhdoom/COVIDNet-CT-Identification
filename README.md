@@ -42,6 +42,7 @@ After 3 epochs, following evaluation metrics were achieved :
 
 
 ### References
+- [Transfer Learning for Medical Images](https://learnopencv.com/transfer-learning-for-medical-images/)
 
 - [Measuring and tuning performance of a TensorFlow inference system using Triton Inference Server and Tesla T4](https://cloud.google.com/architecture/scalable-tensorflow-inference-system-using-tensorrt-and-tesla-t4)
 
